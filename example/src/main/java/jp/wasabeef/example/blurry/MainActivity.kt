@@ -9,6 +9,8 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.doOnNextLayout
+import androidx.core.view.doOnPreDraw
 import jp.wasabeef.blurry.Blurry
 
 class MainActivity : AppCompatActivity() {
@@ -19,7 +21,26 @@ class MainActivity : AppCompatActivity() {
     
     Toast.makeText(this, "Touch 'BLURRY' to blur the dogs", Toast.LENGTH_LONG).show()
 
+    var performanceTestDone = false
+    val fullscreenImageView = findViewById<ImageView>(R.id.fullscreen_invisible)
+    fullscreenImageView.doOnNextLayout { // Prevent crash when phone is locked/screen off (or random ?)
+      fullscreenImageView.doOnPreDraw {
+        Blurry.with(this)
+          .radius(25)
+          .sampling(1)
+          .capture(fullscreenImageView)
+          .getAsync {
+            fullscreenImageView.setImageDrawable(BitmapDrawable(resources, it))
+            performanceTestDone=true
+          }
+      }
+    }
+
     findViewById<View>(R.id.button).setOnClickListener {
+      if (!performanceTestDone) {
+        Toast.makeText(this, "Please wait for performance test to finish (see logs)", Toast.LENGTH_LONG).show()
+        return@setOnClickListener
+      }
       val startMs = System.currentTimeMillis()
       Blurry.with(this)
         .radius(25)

@@ -49,6 +49,51 @@ class Blur {
     return bitmap;
   }
 
+  static int lastUsedNumberOfJobs = 0;
+  public static void runPerformanceTest(Context context, Bitmap source, BlurFactor factor, Canvas canvas, Bitmap bitmap, Paint paint) {
+    int runs = 200;
+    Log.i("Blurry", "Performance test with "+runs+" executions and with sampling factor " + factor.sampling);
+    // Warm-up
+    for (int i = 0; i < 10; i++) {
+      Blur.stack(bitmap, factor.radius, true);
+      Blur.optimizedStack(bitmap, factor.radius, true, 1);
+      Blur.rs(context, bitmap, factor.radius);
+    }
+
+    // First test
+    canvas.drawBitmap(source, 0, 0, paint); // so all treat same data, though it shouldn't matter
+    long startBlurOriginal = System.currentTimeMillis();
+    for (int i = 0; i < runs; i++) Blur.stack(bitmap, factor.radius, true);
+    Log.i("Blurry", "Runtime Original Stack average: " + (System.currentTimeMillis() - startBlurOriginal) / runs + "ms");
+
+    canvas.drawBitmap(source, 0, 0, paint); // so all treat same data, though it shouldn't matter
+    long startBlurRs = System.currentTimeMillis();
+    for (int i = 0; i < runs; i++) Blur.rs(context, bitmap, factor.radius);
+    Log.i("Blurry", "Runtime RS average: " + (System.currentTimeMillis() - startBlurRs) / runs + "ms");
+
+    canvas.drawBitmap(source, 0, 0, paint); // so all treat same data, though it shouldn't matter
+    long startBlurSingleThread = System.currentTimeMillis();
+    for (int i = 0; i < runs; i++) Blur.optimizedStack(bitmap, factor.radius, true, 0);
+    Log.i("Blurry", "Runtime optimized SingleThreaded average: " + (System.currentTimeMillis() - startBlurSingleThread) / runs + "ms when split into "+lastUsedNumberOfJobs +" jobs");
+
+    canvas.drawBitmap(source, 0, 0, paint); // so all treat same data, though it shouldn't matter
+    long startBlurMulti1 = System.currentTimeMillis();
+    for (int i = 0; i < runs; i++) Blur.optimizedStack(bitmap, factor.radius, true, 1);
+    Log.i("Blurry", "Runtime optimized MultiThreaded average: " + (System.currentTimeMillis() - startBlurMulti1) / runs + "ms when split into "+lastUsedNumberOfJobs +" jobs");
+
+    canvas.drawBitmap(source, 0, 0, paint); // so all treat same data, though it shouldn't matter
+    long startBlurMulti2 = System.currentTimeMillis();
+    for (int i = 0; i < runs; i++) Blur.optimizedStack(bitmap, factor.radius, true, 2);
+    Log.i("Blurry", "Runtime optimized MultiThreaded2 average: " + (System.currentTimeMillis() - startBlurMulti2) / runs + "ms when split into "+lastUsedNumberOfJobs +" jobs");
+
+    canvas.drawBitmap(source, 0, 0, paint); // so all treat same data, though it shouldn't matter
+    long startBlurMulti3 = System.currentTimeMillis();
+    for (int i = 0; i < runs; i++) Blur.optimizedStack(bitmap, factor.radius, true, 3);
+    Log.i("Blurry", "Runtime optimized MultiThreaded3 average: " + (System.currentTimeMillis() - startBlurMulti3) / runs + "ms when split into "+lastUsedNumberOfJobs +" jobs");
+
+    canvas.drawBitmap(source, 0, 0, paint); // So real code works, because above blurs the same image a bit much...
+  }
+
   public static Bitmap of(Context context, Bitmap source, BlurFactor factor) {
     int width = factor.width / factor.sampling;
     int height = factor.height / factor.sampling;
@@ -69,6 +114,8 @@ class Blur {
     paint.setColorFilter(filter);
     canvas.drawBitmap(source, 0, 0, paint);
     if (BuildConfig.DEBUG) Log.i("Blurry", "Time to draw source to Canvas: " + (System.currentTimeMillis() - startDrawToCanvas) + "ms");
+
+    runPerformanceTest(context, source, factor, canvas, bitmap, paint);
 
     long startBlur = System.currentTimeMillis();
     if (Build.VERSION.SDK_INT >= 31) {
@@ -364,6 +411,10 @@ class Blur {
   }
 
   public static Bitmap optimizedStack(Bitmap sentBitmap, int radius, boolean canReuseInBitmap) {
+    return optimizedStack(sentBitmap, radius, canReuseInBitmap, 0);
+  }
+
+  public static Bitmap optimizedStack(Bitmap sentBitmap, int radius, boolean canReuseInBitmap, int multiThreadType) {
 
     /*
      * An optimized version of stack blur, 2x faster than the original.
@@ -394,18 +445,19 @@ class Blur {
     int cores = EXECUTOR_THREADS;
 
     // The multi-threaded version produces images with small errors, hence disabled
-    if (cores > 1 && false) {
+    if (cores > 1 && multiThreadType > 0) {
       ExecutorService threadPool = Executors.newFixedThreadPool(cores); // Maybe move out into static Blurry, instead of recreating on each run.
       // The cores may not be equally fast, so we make more jobs than cores. Its significantly faster to use cores*5 than cores job on Samsung S20 FE.
-      int jobs = cores * 10;
+      int jobs = multiThreadType == 1 ? cores :
+        multiThreadType == 2 ? cores * 5 : cores * 10 ;
+      lastUsedNumberOfJobs = jobs;
       List<Callable<Object>> todo = new ArrayList<>(jobs);
-
       for (int i = 0; i < jobs; i++) {
         final int job = i;
         todo.add(() -> {
           internal_optimized_stack_iteration(src, w, h, radius, jobs, job, 1);
           internal_optimized_stack_iteration(src, w, h, radius, jobs, job, 2);
-          if (BuildConfig.DEBUG) Log.i("Blurry", job+" finished, thread="+Thread.currentThread().getName());
+//          if (BuildConfig.DEBUG) Log.i("Blurry", "Threads: "+job+" finished, thread="+Thread.currentThread().getName());
           return null;
         });
       }
@@ -413,8 +465,8 @@ class Blur {
         threadPool.invokeAll(todo);
       } catch (InterruptedException e) {
       }
-      if (BuildConfig.DEBUG) Log.i("Blurry", "All jobs finished");
     } else {
+      lastUsedNumberOfJobs = 0;
       // it runs in same thread, so just say theres 1 core
       internal_optimized_stack_iteration(src, w, h, radius, 1, 0, 1);
       internal_optimized_stack_iteration(src, w, h, radius, 1, 0, 2);
